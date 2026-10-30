@@ -1,0 +1,10 @@
+[project]
+name = "vertice-content-agent"
+version = "0.1.0"
+description = "Agente de contenido de VérticeDev: investiga búsquedas, propone y redacta artículos y aprende de los resultados"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools.package-data]
+vca = ["prompts/*.md"]
