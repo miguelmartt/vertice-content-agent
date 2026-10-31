@@ -66,7 +66,7 @@ Solo atiende al chat de `VCA_TELEGRAM_CHAT_ID`.
    ```
 
    Inicia sesión con la cuenta propietaria. Te imprime las tres variables `VCA_GSC_*`, con alcance de solo lectura.
-4. **GitHub.** Crea un token fine-grained solo para `miguelmartt/verticedev` con Contents y Pull requests en lectura y escritura, y Checks, Commit statuses y Metadata en lectura.
+4. **GitHub.** Crea un token fine-grained solo para `miguelmartt/verticedev` con Contents y Pull requests en lectura y escritura, y Actions, Commit statuses y Metadata en lectura. Los tokens fine-grained no admiten Checks: el agente lee la CI a través de Actions.
 
 ### 2. En el VPS (como root)
 

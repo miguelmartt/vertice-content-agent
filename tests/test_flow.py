@@ -64,6 +64,7 @@ class FakeGSC:
 class FakeGitHub:
     def __init__(self, ok=True):
         self.ok = ok
+        self.error = None
         self.merged = []
         self.closed = []
 
@@ -71,6 +72,8 @@ class FakeGitHub:
         return 7, "https://github.com/miguelmartt/verticedev/pull/7"
 
     def checks(self, sha):
+        if self.error:
+            raise self.error
         if self.ok:
             return {"total": 3, "pending": [], "failed": [], "ok": True}
         return {"total": 3, "pending": [], "failed": ["php-tests"], "ok": False}
@@ -282,6 +285,23 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.app.db.proposal(p["id"])["status"], "review")
         self.assertEqual(self.github.merged, [])
         self.assertIn("CI ha fallado", self.tg.text())
+
+    def test_unreadable_ci_is_reported_after_timeout(self):
+        self.github.error = app_module.http.HttpError(403, "Resource not accessible", "https://api.github.com/x")
+        self.app.plan_week()
+        p = self.app.db.proposals()[0]
+        self.press(f"draft:{p['id']}")
+        self.run_queue()
+        self.press(f"publish:{p['id']}")
+        self.run_queue()
+        self.app.ci_watch()
+        self.assertEqual(self.app.db.proposal(p["id"])["status"], "publishing")
+        since = (self.app.now() - timedelta(minutes=self.app.cfg.ci_timeout_minutes + 1)).isoformat()
+        self.app.db.update_proposal(p["id"], self.app.now(), publishing_since=since)
+        self.app.ci_watch()
+        self.assertEqual(self.app.db.proposal(p["id"])["status"], "review")
+        self.assertEqual(self.github.merged, [])
+        self.assertIn("No puedo leer la CI", self.tg.text())
 
     def test_other_chats_are_ignored(self):
         self.app.plan_week()

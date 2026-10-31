@@ -478,12 +478,19 @@ class App:
 
     def ci_watch(self) -> None:
         for p in self.db.proposals(["publishing"]):
+            since = datetime.fromisoformat(p["publishing_since"])
             try:
                 checks = self.github.checks(p["head_sha"])
             except http.HttpError as exc:
                 log.warning("No puedo leer CI del PR %s: %s", p["pr_number"], exc)
+                if self.now() - since > timedelta(minutes=self.cfg.ci_timeout_minutes):
+                    self.db.update_proposal(p["id"], self.now(), status="review", last_error=str(exc)[:500])
+                    self.tg.send(
+                        f"⚠️ No puedo leer la CI de «{esc(p['title'])}»: {esc(str(exc)[:200])}. "
+                        f'Revisa que el token de GitHub tenga Actions en lectura. <a href="{esc(p["pr_url"])}">Ver PR</a>',
+                        review_buttons(p["id"]),
+                    )
                 continue
-            since = datetime.fromisoformat(p["publishing_since"])
             if checks["ok"]:
                 self.merge(p)
             elif checks["failed"]:

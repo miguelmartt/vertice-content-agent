@@ -1,7 +1,7 @@
 """PR del artículo en GitHub: abrir, consultar CI, fusionar y cerrar.
 
 Usa un token fine-grained limitado al repositorio de la web, con permisos de
-Contents y Pull requests en escritura y Checks y Commit statuses en lectura.
+Contents y Pull requests en escritura y Actions y Commit statuses en lectura.
 """
 
 from __future__ import annotations
@@ -45,9 +45,23 @@ class GitHub:
         pr = self._call("POST", "/pulls", {"title": title, "head": branch, "base": base, "body": body})
         return pr["number"], pr["html_url"]
 
+    def head_sha(self, ref: str) -> str:
+        return self._call("GET", f"/commits/{ref}")["sha"]
+
     def checks(self, sha: str) -> Dict[str, Any]:
-        """Estado de CI de un commit: total, pendientes, fallidos y si está todo verde."""
-        runs = self._call("GET", f"/commits/{sha}/check-runs", params={"per_page": 100}).get("check_runs", [])
+        """Estado de CI de un commit: total, pendientes, fallidos y si está todo verde.
+
+        Los tokens fine-grained no admiten el permiso Checks: si GitHub no deja leer
+        los check runs, lee las ejecuciones de GitHub Actions, que es la CI de la web.
+        """
+        source = "checks"
+        try:
+            runs = self._call("GET", f"/commits/{sha}/check-runs", params={"per_page": 100}).get("check_runs", [])
+        except http.HttpError as exc:
+            if exc.status not in (403, 404):
+                raise
+            source = "actions"
+            runs = self._call("GET", "/actions/runs", params={"head_sha": sha, "per_page": 100}).get("workflow_runs", [])
         pending = [r["name"] for r in runs if r.get("status") != "completed"]
         failed = [
             r["name"] for r in runs
@@ -61,7 +75,8 @@ class GitHub:
                 elif s.get("state") in ("failure", "error"):
                     failed.append(s.get("context", "status"))
         total = len(runs) + int(status.get("total_count") or 0)
-        return {"total": total, "pending": pending, "failed": failed, "ok": total > 0 and not pending and not failed}
+        return {"total": total, "pending": pending, "failed": failed, "ok": total > 0 and not pending and not failed,
+                "source": source}
 
     def merge(self, number: int, title: str) -> str:
         result = self._call("PUT", f"/pulls/{number}/merge", {"merge_method": "merge", "commit_title": title})

@@ -91,6 +91,12 @@ def cmd_check(cfg: Config) -> int:
             line(True, "GitHub", f"{info.get('full_name')} (rama por defecto {info.get('default_branch')})")
         except Exception as exc:
             line(False, "GitHub", str(exc)[:200])
+        try:
+            ci = app.github.checks(app.github.head_sha(cfg.github_base))
+            via = "GitHub Actions" if ci["source"] == "actions" else "check runs"
+            line(True, "CI de la web", f"{ci['total']} comprobaciones en {cfg.github_base}, leídas por {via}")
+        except Exception as exc:
+            line(False, "CI de la web", f"{str(exc)[:200]} (¿falta Actions en lectura en el token?)")
     try:
         app.site.sync()
         site = app.site.load()
