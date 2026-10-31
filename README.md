@@ -1,110 +1,136 @@
 # vertice-content-agent
 
-Agente de contenido del blog de [VérticeDev](https://verticedev.es). Vive en el VPS como servicio de systemd y te habla por Telegram.
+[Leer en español](README.es.md)
 
-- **Investiga** cada lunes qué se busca: las consultas reales de Search Console (90 días) y el autocompletado de Google a partir de tus servicios, tus consultas principales y las semillas que le des.
-- **Propone** tres temas por semana: mejoras de artículos que ya tienen impresiones y artículos nuevos con demanda y relación con un servicio. Cada propuesta lleva sus cifras y un ángulo que solo tú puedes dar.
-- **Redacta** con Claude Code y tu suscripción, no con la API. Valida el borrador con las reglas de la web, lo escribe en el registro `Blog.php` y en su vista Blade y abre un PR.
-- **Publica** cuando pulsas «Publicar»: rehace la rama sobre el `main` actual, espera a que CI esté en verde y fusiona. El despliegue (`deploy.sh`) lo sigues lanzando tú.
-- **Aprende** midiendo cada artículo a los 14, 28 y 56 días en Search Console y de lo que apruebas, descartas y comentas.
-- **Revisa tus servicios** el día 1 de cada mes: qué servicios tienen búsquedas, cuáles no y qué demanda no cubre ninguno.
+A content agent for the blog of a Laravel website. It runs on your VPS as a systemd service, researches what people search for, drafts articles with Claude Code and asks for your approval on Telegram before anything gets published.
 
-Solo librería estándar de Python (3.9 o superior), SQLite y long polling de Telegram: sin dependencias y sin puertos abiertos.
+I built it for the [VérticeDev](https://verticedev.es) blog and I'm releasing it as is, under the MIT license. Prompts and messages are in Spanish.
 
-## Cómo funciona
+- **Researches** every Monday what people search for: real Search Console queries (90 days) and Google autocomplete, seeded with your services, your top queries and any seeds you add.
+- **Proposes** three topics a week: improvements to articles that already get impressions, and new articles with demand that relate to one of your services. Every proposal comes with its numbers and an angle only you can bring.
+- **Drafts** with Claude Code on your subscription, not the API. It validates the draft against the site's rules, writes the entry into the `Blog.php` registry plus its Blade view and opens a PR.
+- **Publishes** when you tap "Publicar": it rebuilds the branch on top of the current `main`, waits for green CI and merges. You still run the deploy yourself.
+- **Learns** by measuring each article in Search Console at 14, 28 and 56 days, and from what you approve, reject and comment.
+- **Reviews your services** on the 1st of every month: which services get searches, which don't, and what demand none of them covers.
+
+Python standard library only (3.9+), SQLite and Telegram long polling: no dependencies and no open ports.
+
+## How it works
 
 ```
-lunes 08:00 ─ investigar ─ Search Console + autocompletado → candidatas puntuadas
-             └ planificar ─ Claude elige 3 temas con datos → Telegram [Redactar] [Ajustar] [Descartar]
-Redactar ─── Claude escribe bloques (no HTML) → validación → vista Blade + Blog.php → PR → Telegram
-             [Publicar] [Pedir cambios] [Descartar]
-Publicar ─── rama sobre main con la fecha de hoy → CI en verde → merge → «lanza deploy.sh»
-cada 15 min ─ ¿ya está en producción? → mide a los 14, 28 y 56 días → ajusta los pesos
-día 1 ────── informe de servicios + memoria de aprendizajes
+Monday 08:00 ─ research ─ Search Console + autocomplete → scored candidates
+              └ plan ──── Claude picks 3 data-backed topics → Telegram [Draft] [Adjust] [Reject]
+Draft ─────── Claude writes content blocks (not HTML) → validation → Blade view + Blog.php → PR → Telegram
+              [Publish] [Request changes] [Discard]
+Publish ───── branch rebuilt on main with today's date → green CI → merge of the reviewed commit
+every 15 min ─ is it live? → measure at 14, 28 and 56 days → adjust the weights
+1st of month ─ services report + learning memo
 ```
 
-### Qué es «aprender» aquí
+### What "learning" means here
 
-No se entrena ningún modelo. Hay un bucle de mejora con tres piezas:
+No model is trained. There is an improvement loop with three parts:
 
-1. **Puntuación con pesos.** Cada palabra clave tiene señales entre 0 y 1: impresiones, oportunidad de posición (4–20), demanda en el autocompletado, encaje con un servicio, si ya hay un artículo que la cubre, intención (comercial, comparación, local). La puntuación es la suma ponderada.
-2. **Ajuste por resultados.** A los 28 y 56 días de publicar, el agente compara lo que predijo con lo que midió en Search Console y corrige los pesos por descenso de gradiente: las señales que acertaron ganan peso. Con el poco tráfico actual, los primeros ajustes útiles llegarán a los dos o tres meses.
-3. **Tus decisiones.** Lo que apruebas y descartas por categoría, intención y tipo multiplica la puntuación. Los motivos de descarte y tus comentarios a los borradores entran en la memoria mensual que resume Claude, y esa memoria se usa al planificar.
+1. **Weighted scoring.** Each keyword gets signals between 0 and 1: impressions, position opportunity (4–20), autocomplete demand, fit with a service, whether an article already covers it, and intent (commercial, comparison, local). The score is the weighted sum.
+2. **Outcome-based updates.** At 28 and 56 days after publishing, the agent compares what it predicted with what Search Console measured and updates the weights with gradient descent: signals that were right gain weight. With little traffic, the first useful updates take two or three months.
+3. **Your decisions.** What you approve and reject, by category, intent and kind, multiplies the score. Rejection reasons and your comments on drafts go into a monthly memo that Claude summarises and that is used when planning.
 
-`/aprendizaje` en Telegram enseña los pesos, tus preferencias y la memoria.
+`/aprendizaje` in Telegram shows the weights, your preferences and the memo.
 
-### Qué no hace
+### What it doesn't do
 
-- No publica nada sin tu botón.
-- No ejecuta `deploy.sh` ni toca `/var/www/verticedev`: trabaja en su propio clon.
-- No cambia los servicios: solo te los comenta en el informe mensual.
-- No inventa cifras ni experiencias: lo que necesita de ti lo pregunta en el borrador («Necesito que me confirmes»).
+- It never publishes without your tap.
+- It doesn't deploy or touch the production folder of the site: it works on its own clone.
+- It doesn't change your services: it only comments on them in the monthly report.
+- It doesn't make up numbers or experiences: whatever it needs from you, it asks in the draft.
 
-## Comandos de Telegram
+## Security
 
-| Comando | Qué hace |
+The agent treats everything the model writes and everything it reads from Google as untrusted: a piece of text could try to sneak into the article. So:
+
+- **The model never writes HTML or Blade.** It returns content blocks that the agent turns into HTML. Every `@`, `{` and `}` in the text is stored as an HTML entity: readers see the same thing and Blade has nothing to compile. A final check rejects the draft if any Blade syntax is left outside the template.
+- **Claude has no tools**: no file, network or shell access, in an empty folder and with only its own token.
+- **Each process gets the minimum.** PHP and git never see the agent's tokens. Claude never receives an API key, so it always uses your subscription.
+- **Only you** can use the bot: your user, in your private chat with it.
+- **Nothing is merged without you.** Each "Publish" button is tied to its draft, and the merge only happens on the commit whose CI passed.
+- **A sandboxed systemd service**: it can only write to its state folder, can't execute anything from it except Claude Code, and can't modify that binary.
+
+Full threat model and how to report a vulnerability: [SECURITY.md](SECURITY.md).
+
+## Telegram commands
+
+| Command | What it does |
 |---|---|
-| `/plan` | Propuestas y borradores abiertos |
-| `/investigar` | Investigación y plan ahora |
-| `/estado` | Qué está haciendo y qué tiene pendiente |
-| `/aprendizaje` | Pesos, preferencias y memoria |
-| `/informe` | Informe de servicios ahora |
-| `/cancelar` | Olvida la respuesta que estaba esperando |
+| `/plan` | Open proposals and drafts |
+| `/investigar` | Research and plan now |
+| `/estado` | What it's doing and what's pending |
+| `/aprendizaje` | Weights, preferences and memo |
+| `/informe` | Services report now |
+| `/cancelar` | Forget the reply it was waiting for |
 
-Solo atiende al chat de `VCA_TELEGRAM_CHAT_ID`.
+## What it expects from your site
 
-## Puesta en marcha
+It is built for a Laravel site that stores its blog the way VérticeDev does:
 
-### 1. En tu ordenador
+- an article registry in `app/Support/Blog.php`: a private `posts()` method returning an array, a `CATEGORIES` constant, and `Services` and `Portfolio` registries next to it;
+- one view per article in `resources/views/blog/<slug>.blade.php` that extends `layouts.article`;
+- GitHub Actions CI that renders the pages, so a broken article never reaches `main`.
 
-1. **Bot de Telegram.** Crea uno con @BotFather y guarda el token. Escríbele cualquier cosa y saca tu chat id de `https://api.telegram.org/bot<TOKEN>/getUpdates` (`message.chat.id`).
-2. **Claude Code.** `claude setup-token` genera un token de larga duración de tu suscripción. Guárdalo: es `CLAUDE_CODE_OAUTH_TOKEN`.
-3. **Search Console.** Usa el cliente OAuth «Aplicación de escritorio» que ya tienes para el MCP `gsc` (el JSON de `GSC_OAUTH_CLIENT_SECRETS_FILE`) y ejecuta:
+If your site is different, the parts to adapt are `vca/site.py` and `vca/render.py`. Everything else (research, learning, Telegram, GitHub) doesn't depend on Laravel. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Setup
+
+### 1. On your computer
+
+1. **Telegram bot.** Create it with @BotFather and keep the token. Message it privately and get your id from `https://api.telegram.org/bot<TOKEN>/getUpdates` (`message.chat.id`).
+2. **Claude Code.** `claude setup-token` creates a long-lived token for your subscription: that's `CLAUDE_CODE_OAUTH_TOKEN`.
+3. **Search Console.** In Google Cloud, create an OAuth client of type "Desktop app", enable the Search Console API and set the publishing status to "In production" (in "Testing", the token expires after 7 days). Then:
 
    ```bash
-   python -m vca gsc-auth --client-secrets ruta/al/cliente.json
+   python -m vca gsc-auth --client-secrets path/to/client.json
    ```
 
-   Inicia sesión con la cuenta propietaria. Te imprime las tres variables `VCA_GSC_*`, con alcance de solo lectura.
-4. **GitHub.** Crea un token fine-grained solo para `miguelmartt/verticedev` con Contents y Pull requests en lectura y escritura, y Actions, Commit statuses y Metadata en lectura. Los tokens fine-grained no admiten Checks: el agente lee la CI a través de Actions.
+   Sign in with the owner account. It prints the three `VCA_GSC_*` variables, with read-only access.
+4. **GitHub.** Create a fine-grained token for your site's repository only, with Contents and Pull requests read and write, and Actions, Commit statuses and Metadata read. Fine-grained tokens don't support Checks: the agent reads CI through Actions.
 
-### 2. En el VPS (como root)
+### 2. On the VPS (as root)
 
 ```bash
-git clone git@github.com:miguelmartt/vertice-content-agent.git /root/vertice-content-agent
+git clone https://github.com/miguelmartt/vertice-content-agent.git /root/vertice-content-agent
 bash /root/vertice-content-agent/deploy/install.sh
 runuser -u vca -- env HOME=/var/lib/vertice-content-agent bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
-nano /etc/vertice-content-agent/env      # pega los tokens
-bash /root/vertice-content-agent/deploy/install.sh   # comprueba todo y arranca
+nano /etc/vertice-content-agent/env      # your details and tokens
+bash /root/vertice-content-agent/deploy/install.sh   # checks everything and starts the service
+vca check --claude                       # optional: one real call to Claude
 journalctl -u vertice-content-agent -f
 ```
 
-El instalador crea el usuario de sistema `vca`, copia el código a `/opt/vertice-content-agent`, guarda el estado en `/var/lib/vertice-content-agent` (SQLite y su clon de la web) y deja el servicio aislado: solo puede escribir en su carpeta de estado. No arranca hasta que `python -m vca check` pasa.
+The installer creates the `vca` system user, copies the code to `/opt/vertice-content-agent`, keeps state in `/var/lib/vertice-content-agent` (SQLite and its clone of the site) and sandboxes the service. It won't start until `vca check` passes.
 
-Para actualizar: `git -C /root/vertice-content-agent pull` y otra vez `install.sh`.
+To update: `git -C /root/vertice-content-agent pull` and run `install.sh` again.
 
-Para probar sin abrir PR, pon `VCA_DRY_RUN=1`: Telegram funciona, pero no sube ramas.
+To try it without opening PRs, set `VCA_DRY_RUN=1`: Telegram works, but no branches are pushed.
 
-## Línea de órdenes
+## Command line
 
-En el VPS, el instalador deja el atajo `vca`, que ejecuta como el usuario del servicio y con su configuración:
+On the VPS, the installer adds a `vca` shortcut that runs as the service user with its configuration:
 
 ```bash
-vca check        # configuración y conexiones
-vca research     # candidatas en consola, sin Claude ni Telegram
-vca plan         # plan ahora
-vca learn        # medición y aprendizaje ahora
-vca report       # informe de servicios ahora
-vca status       # estado y pesos
+vca check            # configuration and connections (--claude: also one real call)
+vca research         # candidates in the console, no Claude or Telegram
+vca plan             # plan now
+vca learn            # measure and learn now
+vca report           # services report now
+vca status           # status and weights
 ```
 
-En tu ordenador, lo mismo con `python -m vca <orden>` desde la carpeta del repositorio.
+On your computer, the same with `python -m vca --env-file my.env <command>` from the repository folder.
 
-## Límites conocidos
+## Known limits
 
-- El autocompletado de Google no tiene API oficial: da señales de demanda, no volúmenes. El agente pide como mucho 300 consultas por semana, con pausas, y si Google le frena (429) lo deja hasta la semana siguiente.
-- Claude Code gasta del cupo de tu suscripción. Hay un tope diario de llamadas (`VCA_LLM_MAX_CALLS_PER_DAY`); un plan semanal y un borrador son unas 2 o 3.
-- Con el tráfico actual, el aprendizaje por resultados es lento. Hasta tener datos, mandan las señales por defecto y tus decisiones.
+- Google autocomplete has no official API: it gives demand signals, not volumes. The agent makes at most 300 requests a week, with pauses, and if Google throttles it (429) it stops until the next week.
+- Claude Code uses your subscription's quota. There's a daily call cap (`VCA_LLM_MAX_CALLS_PER_DAY`); a weekly plan plus one draft take about 2 or 3 calls.
+- With little traffic, outcome-based learning is slow. Until there's data, the default signals and your decisions drive the scoring.
 
 ## Tests
 
@@ -112,4 +138,8 @@ En tu ordenador, lo mismo con `python -m vca <orden>` desde la carpeta del repos
 python -m unittest discover -s tests -t .
 ```
 
-Incluyen un recorrido completo con dobles de Telegram, GitHub y Search Console: plan, aprobación, borrador, PR, CI, merge, producción y medición.
+They include a full run with fakes for Telegram, GitHub and Search Console (plan, approval, draft, PR, CI, merge, production and measurement) and the security cases: Blade injection, bot authorization, stale buttons, and secrets in errors and subprocesses.
+
+## License
+
+[MIT](LICENSE) © 2026 VerticeDev

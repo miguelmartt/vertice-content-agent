@@ -1,4 +1,4 @@
-"""Claude Code en modo no interactivo, con la suscripción de Miguel.
+"""Claude Code en modo no interactivo, con tu suscripción.
 
 En el VPS se autentica con CLAUDE_CODE_OAUTH_TOKEN (sale de `claude setup-token`
 en tu ordenador). Se ejecuta sin herramientas (`--tools ""`), sin MCP, sin
@@ -9,14 +9,18 @@ validado contra un JSON Schema. Gasta del cupo de la suscripción, no de la API.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from .db import DB
-from .util import now
+from .util import child_env, now
+
+
+def claude_env() -> Dict[str, str]:
+    """Solo lo que Claude Code necesita: ni los tokens del agente ni ANTHROPIC_API_KEY (siempre la suscripción)."""
+    return child_env("DISABLE_AUTOUPDATER", prefixes=("CLAUDE_",))
 
 
 class LLMError(Exception):
@@ -59,7 +63,7 @@ class LLM:
         try:
             proc = self.runner(
                 cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
-                timeout=timeout or self.timeout, cwd=str(self.sandbox), env=dict(os.environ),
+                timeout=timeout or self.timeout, cwd=str(self.sandbox), env=claude_env(),
             )
             try:
                 data = json.loads(proc.stdout or "{}")

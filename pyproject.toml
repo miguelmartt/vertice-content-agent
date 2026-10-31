@@ -1,7 +1,7 @@
 [project]
 name = "vertice-content-agent"
-version = "0.1.0"
-description = "Agente de contenido de VérticeDev: investiga búsquedas, propone y redacta artículos y aprende de los resultados"
+version = "0.2.0"
+description = "Blog content agent: researches Search Console and Google autocomplete, drafts articles with Claude Code, opens PRs after approval on Telegram and learns from the results"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []

@@ -16,7 +16,8 @@ Button = Tuple[str, str]  # (texto, callback_data)
 
 
 def esc(text: Any) -> str:
-    return html.escape(str(text), quote=False)
+    """Escapa para el modo HTML de Telegram, también dentro de atributos (href="…")."""
+    return html.escape(str(text), quote=True)
 
 
 def keyboard(rows: Sequence[Sequence[Button]]) -> Dict[str, Any]:

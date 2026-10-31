@@ -1,5 +1,5 @@
 [Unit]
-Description=VérticeDev content agent (blog con Search Console, Claude Code y Telegram)
+Description=vertice-content-agent (blog con Search Console, Claude Code y Telegram)
 Documentation=https://github.com/miguelmartt/vertice-content-agent
 After=network-online.target
 Wants=network-online.target
@@ -19,19 +19,41 @@ ExecStart=/usr/bin/python3 -m vca run
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=30
+UMask=0077
 
-# Aislamiento: solo escribe en su carpeta de estado.
+# Sistema de archivos: solo escribe en su carpeta de estado y no puede ejecutar
+# nada de ella salvo Claude Code, que tampoco puede modificar.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/vertice-content-agent
+ReadOnlyPaths=-/var/lib/vertice-content-agent/.local/bin -/var/lib/vertice-content-agent/.local/share/claude
+NoExecPaths=/var/lib/vertice-content-agent
+ExecPaths=-/var/lib/vertice-content-agent/.local/bin -/var/lib/vertice-content-agent/.local/share/claude
 PrivateTmp=yes
 PrivateDevices=yes
+PrivateIPC=yes
+RemoveIPC=yes
+
+# Núcleo y procesos.
+CapabilityBoundingSet=
+AmbientCapabilities=
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
 RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
 LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Sin MemoryDenyWriteExecute: el runtime de Claude Code compila JavaScript al vuelo.
 MemoryMax=1G
 
 [Install]

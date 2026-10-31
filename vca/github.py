@@ -78,8 +78,10 @@ class GitHub:
         return {"total": total, "pending": pending, "failed": failed, "ok": total > 0 and not pending and not failed,
                 "source": source}
 
-    def merge(self, number: int, title: str) -> str:
-        result = self._call("PUT", f"/pulls/{number}/merge", {"merge_method": "merge", "commit_title": title})
+    def merge(self, number: int, title: str, sha: str) -> str:
+        """Fusiona solo si la cabeza del PR sigue siendo `sha`, el commit cuya CI se ha comprobado."""
+        result = self._call("PUT", f"/pulls/{number}/merge",
+                            {"merge_method": "merge", "commit_title": title, "sha": sha})
         return result.get("sha", "")
 
     def close(self, number: int) -> None:

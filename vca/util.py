@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import unicodedata
 from datetime import date, datetime, timezone, tzinfo
-from typing import Iterable, List, Set
+from typing import Dict, Iterable, List, Set, Tuple
 from zoneinfo import ZoneInfo
+
+# Lo que necesita cualquier proceso hijo para funcionar (las de Windows, para desarrollo local).
+BASE_ENV = {
+    "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "TEMP", "TMP",
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC",
+}
+
+
+def child_env(*extra: str, prefixes: Tuple[str, ...] = ()) -> Dict[str, str]:
+    """Entorno mínimo para un subproceso: sin los tokens del agente que no le hacen falta."""
+    keys = BASE_ENV | set(extra)
+    return {k: v for k, v in os.environ.items() if k.upper() in keys or k.startswith(prefixes)}
 
 STOPWORDS = {
     "a", "al", "ante", "con", "como", "cual", "cuales", "cuando", "de", "del", "desde",

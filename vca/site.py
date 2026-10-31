@@ -1,15 +1,15 @@
 """El repositorio de la web: leer los registros, escribir artículos y subir ramas.
 
 El agente trabaja en su propio clon (VCA_STATE_DIR/site), nunca en
-/var/www/verticedev, que es de deploy.sh. Lee los registros con PHP por
+la carpeta de la web en producción. Lee los registros con PHP por
 reflexión, sin arrancar Laravel, así que solo necesita el binario de PHP.
 """
 
 from __future__ import annotations
 
 import base64
+import html
 import json
-import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from .render import php_str
+from .util import child_env
 
 DUMP_PHP = r"""
 $root = $argv[1];
@@ -102,7 +103,7 @@ def extract_sections(view: str) -> Dict[str, str]:
             text = re.sub(r"<(h2|h3)>", r"\n## ", text)
             text = re.sub(r"<li>", "\n- ", text)
             text = re.sub(r"<[^>]+>", "", text)
-            text = re.sub(r"@(verbatim|endverbatim)", "", text)
+            text = html.unescape(re.sub(r"@(verbatim|endverbatim)", "", text))
             out[name] = re.sub(r"\n{3,}", "\n\n", text).strip()
     return out
 
@@ -126,7 +127,7 @@ class SiteRepo:
         self.author_email = author_email
 
     def _env(self) -> Dict[str, str]:
-        env = dict(os.environ)
+        env = child_env()
         env.update(
             GIT_TERMINAL_PROMPT="0",
             GIT_AUTHOR_NAME=self.author_name,
@@ -164,7 +165,7 @@ class SiteRepo:
     def load(self) -> SiteData:
         proc = subprocess.run(
             [self.php_bin, "-r", DUMP_PHP, "--", str(self.dir)],
-            capture_output=True, text=True, encoding="utf-8", timeout=60,
+            capture_output=True, text=True, encoding="utf-8", timeout=60, env=child_env(),
         )
         if proc.returncode != 0:
             raise SiteError(f"PHP no ha podido leer los registros: {proc.stderr.strip()[-500:]}")

@@ -14,8 +14,12 @@ STR_LIST: Dict[str, Any] = {"type": "array", "items": {"type": "string"}}
 INTENTS = ["informational", "commercial", "comparison", "local"]
 
 
-def load_prompt(name: str) -> str:
-    return (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
+def load_prompt(name: str, **values: str) -> str:
+    """Prompt de sistema con {{brand}}, {{site_url}}, {{owner}} y {{author}} rellenados."""
+    text = (PROMPTS / f"{name}.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        text = text.replace("{{" + key + "}}", value)
+    return text
 
 
 def plan(categories: List[str]) -> Dict[str, Any]:

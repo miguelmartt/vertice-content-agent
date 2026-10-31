@@ -5,6 +5,12 @@ recuadro) con un marcado mínimo en línea (**negrita**, `código` y
 [texto](/ruta)). Aquí se escapa todo y se genera el HTML, así que el resultado
 cumple las reglas del sitio: sin style, sin script, sin Blade inyectado y con
 enlaces internos solo a páginas que existen.
+
+El texto de la IA es una entrada no fiable (lo pueden orientar las búsquedas que
+lee). Por eso no se «escapa Blade», que tiene demasiados casos raros: @, { y }
+se codifican como entidades HTML, el navegador los pinta igual y Blade no ve
+ninguna directiva, eco ni comentario. `validate` comprueba al final que en la
+vista no queda sintaxis de Blade fuera de la plantilla.
 """
 
 from __future__ import annotations
@@ -18,7 +24,6 @@ from .util import SLUG_RE, reading_time, word_count
 # Lenguajes que carga resources/js/prism.js (más los que trae el núcleo de Prism).
 CODE_LANGUAGES = {"php", "bash", "sql", "yaml", "json", "ini", "python", "docker", "javascript", "css", "markup"}
 BLOCK_TYPES = {"h2", "h3", "p", "ul", "ol", "code", "callout", "table"}
-SITE_ORIGIN = "https://verticedev.es"
 
 # El job check-debug de CI rechaza esto en cualquier .blade.php, también dentro de un bloque de código.
 DEBUG_RE = re.compile(r"\b(dd|dump|var_dump|print_r)\s*\(")
@@ -26,9 +31,18 @@ FORBIDDEN_RENDERED = [
     (re.compile(r"style\s*=", re.I), "atributo style"),
     (re.compile(r"<style", re.I), "etiqueta <style>"),
     (re.compile(r"<script", re.I), "etiqueta <script>"),
-    (re.compile(r"\{!!"), "eco sin escapar {!! !!}"),
     (re.compile(r"console\.log\s*\("), "console.log("),
 ]
+# Lo único de Blade que puede haber en la vista: la plantilla y los url() de enlaces internos ya comprobados.
+INTERNAL_PATH_RE = re.compile(r"^/(?:[a-z0-9][a-z0-9-]*(?:/[a-z0-9][a-z0-9-]*)*)?$")
+TEMPLATE_RE = re.compile(
+    r"@extends\('layouts\.article', \[|@section\('(?:intro|body)'\)|@endsection"
+    r"|\{\{ url\('/(?:[a-z0-9][a-z0-9-]*(?:/[a-z0-9][a-z0-9-]*)*)?'\) \}\}"
+)
+BLADE_CHARS_RE = re.compile(r"[@{}]")
+BLADE_ENTITIES = {"@": "&#64;", "{": "&#123;", "}": "&#125;"}
+# Campos que van como parámetros de @extends: ahí no sirven entidades, así que se rechazan.
+METADATA_KEYS = ("headline", "seoTitle", "description", "excerpt", "cta")
 
 INDENT = "    "
 
@@ -38,10 +52,9 @@ def php_str(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
-def blade_escape(text: str) -> str:
-    """Neutraliza la sintaxis de Blade en texto ya escapado como HTML."""
-    text = text.replace("{{", "@{{").replace("{!!", "@{!!")
-    return re.sub(r"(?<![\w@])@(?=[A-Za-z_])", "@@", text)
+def blade_safe(text: str) -> str:
+    """Escapa HTML y codifica @, { y } como entidades: Blade no encuentra nada que compilar."""
+    return BLADE_CHARS_RE.sub(lambda m: BLADE_ENTITIES[m.group(0)], html.escape(text, quote=True))
 
 
 def _clean_path(url: str) -> str:
@@ -49,10 +62,24 @@ def _clean_path(url: str) -> str:
     return path.rstrip("/") or "/"
 
 
-def render_inline(text: str, site_paths: Set[str], errors: Optional[List[str]] = None, absolute: bool = False) -> str:
-    """Escapa el texto y aplica **negrita**, `código` y [texto](url)."""
+EXTERNAL_URL_RE = re.compile(r"^https://[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d+)?(?:/[^\s\"'<>`]*)?$")
+
+
+def render_inline(
+    text: str,
+    site_paths: Set[str],
+    errors: Optional[List[str]] = None,
+    absolute: bool = False,
+    origin: str = "",
+) -> str:
+    """Escapa el texto y aplica **negrita**, `código` y [texto](url).
+
+    Con `absolute` genera HTML normal para la vista previa (enlaces internos con `origin`);
+    sin él, HTML para una vista Blade.
+    """
     errors = errors if errors is not None else []
-    escaped = blade_escape(html.escape(text.strip(), quote=True)) if not absolute else html.escape(text.strip(), quote=True)
+    escape = (lambda s: html.escape(s, quote=True)) if absolute else blade_safe
+    escaped = escape(text.strip())
 
     codes: List[str] = []
 
@@ -66,15 +93,15 @@ def render_inline(text: str, site_paths: Set[str], errors: Optional[List[str]] =
         label, url = match.group(1), html.unescape(match.group(2)).strip()
         if url.startswith("/"):
             path = _clean_path(url)
-            if path not in site_paths:
+            if not INTERNAL_PATH_RE.match(path) or path not in site_paths:
                 errors.append(f"Enlace interno a una página que no existe: {path}")
                 return label
             if absolute:
-                return f'<a href="{SITE_ORIGIN}{path}">{label}</a>'
+                return f'<a href="{html.escape(origin + path, quote=True)}">{label}</a>'
             return f"<a href=\"{{{{ url('{path}') }}}}\">{label}</a>"
-        if url.startswith("https://"):
-            safe = html.escape(url, quote=True)
-            return f'<a href="{safe}" target="_blank" rel="noopener noreferrer">{label}</a>'
+        if EXTERNAL_URL_RE.match(url):
+            # Enlaces que propone la IA: sin transmitir autoridad y sin acceso a la página de origen.
+            return f'<a href="{escape(url)}" target="_blank" rel="nofollow noopener noreferrer">{label}</a>'
         errors.append(f"Enlace no permitido (solo rutas internas o https): {url}")
         return label
 
@@ -91,13 +118,7 @@ def _render_code(block: Dict[str, Any], errors: List[str]) -> List[str]:
         errors.append(f"Lenguaje de código no cargado en Prism: {language or '(vacío)'}")
         language = "bash"
     code = (block.get("code") or "").rstrip()
-    if "@endverbatim" in code:
-        errors.append("Un bloque de código contiene @endverbatim")
-    escaped = html.escape(code, quote=False)
-    pre = f'{INDENT}<pre><code class="language-{language}">{escaped}</code></pre>'
-    if "{{" in code or "{!!" in code or "@" in code:
-        return [f"{INDENT}@verbatim", pre, f"{INDENT}@endverbatim"]
-    return [pre]
+    return [f'{INDENT}<pre><code class="language-{language}">{blade_safe(code)}</code></pre>']
 
 
 def _render_table(block: Dict[str, Any], site_paths: Set[str], errors: List[str]) -> List[str]:
@@ -116,7 +137,7 @@ def _render_table(block: Dict[str, Any], site_paths: Set[str], errors: List[str]
             errors.append("Una fila de la tabla no tiene tantas celdas como cabeceras")
         lines.append(f"{i4}<tr>")
         for header, cell in zip(headers, cells):
-            label = blade_escape(html.escape(header, quote=True))
+            label = blade_safe(header)
             lines.append(f'{i5}<td data-label="{label}">{render_inline(cell, site_paths, errors)}</td>')
         lines.append(f"{i4}</tr>")
     lines += [f"{i3}</tbody>", f"{i2}</table>", f"{INDENT}</div>"]
@@ -157,7 +178,8 @@ def render_blocks(blocks: Iterable[Dict[str, Any]], site_paths: Set[str], errors
 def render_view(draft: Dict[str, Any], site_paths: Set[str], errors: Optional[List[str]] = None) -> str:
     """Vista Blade completa para resources/views/blog/<slug>.blade.php."""
     errors = errors if errors is not None else []
-    keywords = ", ".join(php_str(k) for k in draft.get("keywords") or [])
+    raw_keywords = draft.get("keywords") or []
+    keywords = ", ".join(php_str(str(k)) for k in (raw_keywords if isinstance(raw_keywords, list) else []))
     params = [
         f"{INDENT}'headline' => {php_str(draft['headline'])},",
         f"{INDENT}'seoTitle' => {php_str(draft['seoTitle'])},",
@@ -174,26 +196,30 @@ def render_view(draft: Dict[str, Any], site_paths: Set[str], errors: Optional[Li
     )
 
 
-def render_preview(draft: Dict[str, Any], site_paths: Set[str]) -> str:
+def render_preview(draft: Dict[str, Any], site_paths: Set[str], origin: str = "") -> str:
     """HTML autónomo para leer el borrador en el móvil (se manda por Telegram, no se publica)."""
     errors: List[str] = []
     parts: List[str] = []
+
+    def inline(text: str) -> str:
+        return render_inline(text, site_paths, errors, absolute=True, origin=origin)
+
     for block in draft.get("blocks") or []:
         kind = block.get("type")
         text = block.get("text") or ""
         if kind in ("h2", "h3", "p"):
-            parts.append(f"<{kind}>{render_inline(text, site_paths, errors, absolute=True)}</{kind}>")
+            parts.append(f"<{kind}>{inline(text)}</{kind}>")
         elif kind in ("ul", "ol"):
-            items = "".join(f"<li>{render_inline(str(i), site_paths, errors, absolute=True)}</li>" for i in block.get("items") or [])
+            items = "".join(f"<li>{inline(str(i))}</li>" for i in block.get("items") or [])
             parts.append(f"<{kind}>{items}</{kind}>")
         elif kind == "code":
             parts.append(f"<pre><code>{html.escape(block.get('code') or '')}</code></pre>")
         elif kind == "callout":
-            parts.append(f"<blockquote>{render_inline(text, site_paths, errors, absolute=True)}</blockquote>")
+            parts.append(f"<blockquote>{inline(text)}</blockquote>")
         elif kind == "table":
             head = "".join(f"<th>{html.escape(str(h))}</th>" for h in block.get("headers") or [])
             rows = "".join(
-                "<tr>" + "".join(f"<td>{render_inline(str(c), site_paths, errors, absolute=True)}</td>" for c in r) + "</tr>"
+                "<tr>" + "".join(f"<td>{inline(str(c))}</td>" for c in r) + "</tr>"
                 for r in block.get("rows") or []
             )
             parts.append(f"<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>")
@@ -209,7 +235,7 @@ def render_preview(draft: Dict[str, Any], site_paths: Set[str]) -> str:
         "blockquote{border-left:4px solid #c5ff3a;margin:0;padding:4px 12px;background:#f5f5f7}"
         ".meta{color:#6e6e73;font-size:14px}"
     )
-    intro = render_inline(draft.get("intro") or "", site_paths, errors, absolute=True)
+    intro = inline(draft.get("intro") or "")
     return (
         f"<!doctype html><html lang=es><meta charset=utf-8>"
         f"<meta name=viewport content='width=device-width,initial-scale=1'><title>{title}</title>"
@@ -245,10 +271,14 @@ def validate(
     if errors:
         return errors
 
-    for key in ("headline", "seoTitle", "description", "excerpt", "cta"):
-        value = draft[key]
-        if "{{" in value or "}}" in value or "{!!" in value or "@" in value:
-            errors.append(f"{key} no puede contener {{{{, }}}}, {{!! ni @ (se interpretarían como Blade)")
+    for key in METADATA_KEYS:
+        if BLADE_CHARS_RE.search(draft[key]):
+            errors.append(f"{key} no puede contener @, {{ ni }} (Blade los interpretaría)")
+    keywords = draft.get("keywords") or []
+    if not isinstance(keywords, list) or len(keywords) > 12:
+        errors.append("keywords debe ser una lista de 12 palabras clave como máximo")
+    elif any(not isinstance(k, str) or len(k) > 60 or BLADE_CHARS_RE.search(k) for k in keywords):
+        errors.append("Cada palabra clave debe ser un texto de 60 caracteres como máximo, sin @, { ni }")
     if len(draft["seoTitle"]) > 60:
         errors.append(f"seoTitle tiene {len(draft['seoTitle'])} caracteres; máximo 60")
     if not 120 <= len(draft["description"]) <= 155:
@@ -282,7 +312,21 @@ def validate(
     for pattern, label in FORBIDDEN_RENDERED:
         if pattern.search(view):
             errors.append(f"La vista contiene {label}")
+    if BLADE_CHARS_RE.search(TEMPLATE_RE.sub("", view)):
+        errors.append("La vista contiene sintaxis de Blade fuera de la plantilla")
     return sorted(set(errors), key=errors.index)
+
+
+def external_links(draft: Dict[str, Any]) -> List[str]:
+    """Dominios externos a los que enlaza el borrador, para enseñarlos al revisarlo."""
+    texts = [draft.get("intro") or ""]
+    for block in draft.get("blocks") or []:
+        texts.append(block.get("text") or "")
+        texts.extend(str(i) for i in block.get("items") or [])
+        for row in block.get("rows") or []:
+            texts.extend(str(c) for c in row)
+    domains = re.findall(r"\]\(https://([^/)\s:]+)", "\n".join(texts))
+    return sorted(set(d.lower() for d in domains))
 
 
 def finalize(draft: Dict[str, Any]) -> Dict[str, Any]:

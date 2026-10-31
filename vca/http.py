@@ -10,14 +10,38 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, Mapping, Optional, Tuple
 
-USER_AGENT = "vertice-content-agent/0.1 (+https://verticedev.es)"
+USER_AGENT = "vertice-content-agent (+https://github.com/miguelmartt/vertice-content-agent)"
 RETRY_STATUS = {429, 500, 502, 503, 504}
 
 
+SECRET_PATTERNS = [
+    (re.compile(r"bot\d+:[A-Za-z0-9_-]+"), "bot***"),
+    (re.compile(r"(?i)(bearer|token|basic)\s+[A-Za-z0-9._~+/=-]+"), r"\1 ***"),
+    (re.compile(r"github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]+"), "***"),
+    (re.compile(r"sk-ant-[A-Za-z0-9_-]+"), "***"),
+    (re.compile(r"1//[A-Za-z0-9_-]{20,}|ya29\.[A-Za-z0-9._-]+|GOCSPX-[A-Za-z0-9_-]+"), "***"),
+]
+
+
 def redact(text: str) -> str:
-    """Quita tokens de Telegram y cabeceras de autorización de un texto de error."""
-    text = re.sub(r"bot\d+:[A-Za-z0-9_-]+", "bot***", text)
-    return re.sub(r"(?i)(bearer|token)\s+[A-Za-z0-9._-]+", r"\1 ***", text)
+    """Quita tokens (Telegram, GitHub, Claude, Google) y cabeceras de autorización de un texto."""
+    for pattern, replacement in SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+class _NoAuthOnRedirect(urllib.request.HTTPRedirectHandler):
+    """Si una redirección cambia de host o de esquema, no le pasa la cabecera Authorization."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        old, target = urllib.parse.urlsplit(req.full_url), urllib.parse.urlsplit(newurl)
+        if new is not None and (old.scheme, old.netloc) != (target.scheme, target.netloc):
+            new.remove_header("Authorization")
+        return new
+
+
+_opener = urllib.request.build_opener(_NoAuthOnRedirect)
 
 
 class HttpError(Exception):
@@ -56,7 +80,7 @@ def request(
     while True:
         req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with _opener.open(req, timeout=timeout) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
             payload = exc.read().decode("utf-8", errors="replace")

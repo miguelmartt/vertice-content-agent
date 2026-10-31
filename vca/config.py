@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Mapping, Optional
+from typing import Dict, List, Mapping, Optional
 
 
 class ConfigError(Exception):
@@ -47,9 +47,30 @@ def _bool(env: Mapping[str, str], name: str, default: bool = False) -> bool:
 # Variables obligatorias por funcionalidad. `check` y `run` las comprueban.
 REQUIRED = {
     "telegram": ("VCA_TELEGRAM_TOKEN", "VCA_TELEGRAM_CHAT_ID"),
-    "gsc": ("VCA_GSC_CLIENT_ID", "VCA_GSC_CLIENT_SECRET", "VCA_GSC_REFRESH_TOKEN"),
-    "github": ("VCA_GITHUB_TOKEN",),
+    "gsc": ("VCA_GSC_CLIENT_ID", "VCA_GSC_CLIENT_SECRET", "VCA_GSC_REFRESH_TOKEN", "VCA_GSC_SITE", "VCA_SITE_URL"),
+    "github": ("VCA_GITHUB_TOKEN", "VCA_GITHUB_REPO"),
+    "profile": ("VCA_BRAND", "VCA_OWNER", "VCA_AUTHOR"),
 }
+
+
+def load_env_file(path: str, environ: Optional[Dict[str, str]] = None) -> None:
+    """Carga un archivo KEY=valor como datos, igual que EnvironmentFile= de systemd.
+
+    No lo interpreta un shell: un valor con $, comillas invertidas o $(…) se queda tal cual.
+    """
+    target = os.environ if environ is None else environ
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key, value = key.strip(), value.strip()
+            if not key.replace("_", "").isalnum() or key[0].isdigit():
+                continue
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            target[key] = value
 
 
 @dataclass
@@ -87,6 +108,10 @@ class Config:
     suggest_country: str
     ci_timeout_minutes: int
     min_words: int
+    deploy_command: str
+    brand: str
+    owner: str
+    author: str
     env: Mapping[str, str]
 
     @property
@@ -114,13 +139,13 @@ class Config:
             gsc_client_id=_get(env, "VCA_GSC_CLIENT_ID", ""),
             gsc_client_secret=_get(env, "VCA_GSC_CLIENT_SECRET", ""),
             gsc_refresh_token=_get(env, "VCA_GSC_REFRESH_TOKEN", ""),
-            gsc_site=_get(env, "VCA_GSC_SITE", "sc-domain:verticedev.es"),
-            site_url=_get(env, "VCA_SITE_URL", "https://verticedev.es").rstrip("/"),
+            gsc_site=_get(env, "VCA_GSC_SITE", ""),
+            site_url=_get(env, "VCA_SITE_URL", "").rstrip("/"),
             github_token=_get(env, "VCA_GITHUB_TOKEN", ""),
-            github_repo=_get(env, "VCA_GITHUB_REPO", "miguelmartt/verticedev"),
+            github_repo=_get(env, "VCA_GITHUB_REPO", ""),
             github_base=_get(env, "VCA_GITHUB_BASE", "main"),
-            git_author_name=_get(env, "VCA_GIT_AUTHOR_NAME", "VérticeDev Content Agent"),
-            git_author_email=_get(env, "VCA_GIT_AUTHOR_EMAIL", "agente@verticedev.es"),
+            git_author_name=_get(env, "VCA_GIT_AUTHOR_NAME", "Content Agent"),
+            git_author_email=_get(env, "VCA_GIT_AUTHOR_EMAIL", "content-agent@localhost"),
             php_bin=_get(env, "VCA_PHP_BIN", "php"),
             git_bin=_get(env, "VCA_GIT_BIN", "git"),
             claude_bin=_get(env, "VCA_CLAUDE_BIN", "claude"),
@@ -139,6 +164,10 @@ class Config:
             suggest_country=_get(env, "VCA_SUGGEST_COUNTRY", "es"),
             ci_timeout_minutes=_int(env, "VCA_CI_TIMEOUT_MINUTES", 30),
             min_words=_int(env, "VCA_MIN_WORDS", 900),
+            deploy_command=_get(env, "VCA_DEPLOY_COMMAND", ""),
+            brand=_get(env, "VCA_BRAND", ""),
+            owner=_get(env, "VCA_OWNER", ""),
+            author=_get(env, "VCA_AUTHOR", ""),
             env=env,
         )
 

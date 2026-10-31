@@ -4,7 +4,7 @@
    impresiones en Search Console, oportunidad de posición, demanda en el
    autocompletado, encaje con un servicio, intención, etc.
 2. La puntuación es la suma ponderada de esas señales, multiplicada por las
-   preferencias de Miguel (lo que aprueba y lo que descarta, por categoría,
+   preferencias del dueño (lo que aprueba y lo que descarta, por categoría,
    intención y tipo de propuesta).
 3. Cuando un artículo publicado cumple 28 y 56 días en producción, se mide en
    Search Console. La diferencia entre lo que predijo y lo que pasó ajusta los

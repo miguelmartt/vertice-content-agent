@@ -55,16 +55,22 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     install -o root -g "${SERVICE_USER}" -m 0640 "${SRC_DIR}/.env.example" "${ENV_FILE}"
     info "Creado ${ENV_FILE}: rellénalo antes de arrancar"
 fi
+# Los tokens: los lee root (systemd) y el grupo del servicio; nadie más.
+chown root:"${SERVICE_USER}" "${ENV_FILE}"
+chmod 0640 "${ENV_FILE}"
 
 install -o root -g root -m 0644 "${SRC_DIR}/deploy/${APP}.service" "${UNIT_FILE}"
 systemctl daemon-reload
 systemctl enable "${APP}" >/dev/null
 
 # Atajo para la línea de órdenes: `vca status`, `vca research`… como el usuario del servicio.
+# La configuración la lee Python como datos (--env-file), igual que systemd: no pasa por un shell.
 cat > /usr/local/bin/vca <<EOF
 #!/usr/bin/env bash
-exec runuser -u ${SERVICE_USER} -- env -i HOME=${STATE_DIR} PATH=${STATE_DIR}/.local/bin:/usr/local/bin:/usr/bin:/bin \\
-    bash -c 'set -a; . ${ENV_FILE}; set +a; cd ${INSTALL_DIR} && VCA_STATE_DIR=${STATE_DIR} exec python3 -m vca "\$@"' vca "\$@"
+cd ${INSTALL_DIR} || exit 1
+exec runuser -u ${SERVICE_USER} -- env -i HOME=${STATE_DIR} VCA_STATE_DIR=${STATE_DIR} DISABLE_AUTOUPDATER=1 \\
+    PYTHONPATH=${INSTALL_DIR} PATH=${STATE_DIR}/.local/bin:/usr/local/bin:/usr/bin:/bin \\
+    python3 -m vca --env-file ${ENV_FILE} "\$@"
 EOF
 chmod 0755 /usr/local/bin/vca
 

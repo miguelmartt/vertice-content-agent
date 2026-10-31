@@ -49,7 +49,7 @@ class CoverageTest(unittest.TestCase):
 class CandidatesTest(unittest.TestCase):
     def test_build_merges_sources_and_scores(self):
         rows = [{"query": "software de gestion a medida", "page": f"{SITE_URL}/servicios/apps-medida",
-                 "clicks": 0, "impressions": 179, "position": 82.4}]
+                 "clicks": 0, "impressions": 140, "position": 64.2}]
         suggestions = {
             "software de gestion a medida": Suggestion("software de gestión a medida", hits=3, best_rank=2),
             "pnpm que es": Suggestion("pnpm que es", hits=1, best_rank=5),
@@ -57,7 +57,7 @@ class CandidatesTest(unittest.TestCase):
         cands = research.build_candidates(rows, suggestions, site_data(), SITE_URL,
                                           learning.merged_weights({}), {})
         top = cands[0]
-        self.assertEqual(top.impressions, 179)
+        self.assertEqual(top.impressions, 140)
         self.assertEqual(top.suggest_hits, 3)
         self.assertEqual(top.service, "apps-medida")
         self.assertEqual(top.features["demand"], 0.75)

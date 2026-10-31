@@ -13,7 +13,7 @@ from datetime import timedelta
 from typing import List, Optional
 
 from . import __version__
-from .config import Config, ConfigError
+from .config import Config, ConfigError, load_env_file
 from .gsc import authorize, load_client_secrets
 
 
@@ -31,7 +31,7 @@ def setup_logging() -> None:
 def cmd_run(cfg: Config) -> int:
     from .app import App
 
-    missing = cfg.missing("telegram", "gsc") + ([] if cfg.dry_run else cfg.missing("github"))
+    missing = cfg.missing("telegram", "gsc", "profile") + ([] if cfg.dry_run else cfg.missing("github"))
     if missing:
         print("Faltan variables: " + ", ".join(missing), file=sys.stderr)
         return 2
@@ -42,12 +42,14 @@ def cmd_run(cfg: Config) -> int:
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    app.run_forever()
-    return 0
+    return 0 if app.run_forever() else 1
 
 
-def cmd_check(cfg: Config) -> int:
-    """Comprueba configuración y conexiones sin cambiar nada (salvo clonar la web en el estado)."""
+def cmd_check(cfg: Config, claude: bool = False) -> int:
+    """Comprueba configuración y conexiones sin cambiar nada (salvo clonar la web en el estado).
+
+    Con `claude`, además hace una llamada real mínima a Claude Code (gasta una del cupo diario).
+    """
     from .app import App
 
     ok = True
@@ -57,7 +59,7 @@ def cmd_check(cfg: Config) -> int:
         ok = ok and passed
         print(f"{'✔' if passed else '✘'} {label}{': ' + detail if detail else ''}")
 
-    for feature in ("telegram", "gsc", "github"):
+    for feature in ("telegram", "gsc", "github", "profile"):
         missing = cfg.missing(feature)
         line(not missing, f"Variables de {feature}", ", ".join(missing) if missing else "completas")
     for label, binary, args in (("git", cfg.git_bin, ["--version"]), ("PHP", cfg.php_bin, ["--version"]),
@@ -103,6 +105,14 @@ def cmd_check(cfg: Config) -> int:
         line(True, "Web", f"{len(site.posts)} artículos, {len(site.services)} servicios, {len(site.projects)} proyectos")
     except Exception as exc:
         line(False, "Web", str(exc)[:300])
+    if claude:
+        try:
+            schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
+            result = app.llm.run("check", "Responde solo con el JSON pedido.", "Devuelve ok = true.", schema,
+                                 cfg.model_plan, timeout=180)
+            line(result.get("ok") is True, "Claude Code responde", f"modelo {cfg.model_plan}")
+        except Exception as exc:
+            line(False, "Claude Code responde", str(exc)[:300])
     print(f"Claude: {app.llm.calls_left_today()} llamadas disponibles hoy (tope {cfg.llm_max_calls_per_day})")
     return 0 if ok else 1
 
@@ -158,11 +168,13 @@ def cmd_gsc_auth(client_secrets: str, no_browser: bool) -> int:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m vca", description="Agente de contenido de VérticeDev")
+    parser = argparse.ArgumentParser(prog="python -m vca", description="Agente de contenido para el blog")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--env-file", help="archivo KEY=valor con la configuración (se lee como datos, sin shell)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run", help="servicio: bot de Telegram, programador y trabajador")
-    sub.add_parser("check", help="comprueba configuración y conexiones")
+    check = sub.add_parser("check", help="comprueba configuración y conexiones")
+    check.add_argument("--claude", action="store_true", help="hace también una llamada real mínima a Claude Code")
     sub.add_parser("plan", help="investiga y manda el plan por Telegram ahora")
     research = sub.add_parser("research", help="investiga y muestra las candidatas en consola")
     research.add_argument("--limit", type=int, default=40)
@@ -178,14 +190,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "gsc-auth":
         return cmd_gsc_auth(args.client_secrets, args.no_browser)
     try:
+        if args.env_file:
+            load_env_file(args.env_file)
         cfg = Config.from_env()
+    except OSError as exc:
+        print(f"No puedo leer {args.env_file}: {exc.strerror}", file=sys.stderr)
+        return 2
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
     if args.command == "run":
         return cmd_run(cfg)
     if args.command == "check":
-        return cmd_check(cfg)
+        return cmd_check(cfg, claude=args.claude)
     if args.command == "research":
         return cmd_research(cfg, args.limit)
     return cmd_simple(cfg, args.command)

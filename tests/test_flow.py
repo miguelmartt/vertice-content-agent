@@ -43,9 +43,9 @@ class FakeGSC:
     def __init__(self):
         self.rows = [
             {"query": "software de gestion a medida", "page": f"{SITE_URL}/servicios/apps-medida",
-             "clicks": 0, "impressions": 179, "ctr": 0.0, "position": 82.4},
+             "clicks": 0, "impressions": 140, "ctr": 0.0, "position": 64.2},
             {"query": "npm o pnpm", "page": f"{SITE_URL}/blog/pnpm-vs-npm-ventajas",
-             "clicks": 1, "impressions": 89, "ctr": 0.01, "position": 7.7},
+             "clicks": 1, "impressions": 75, "ctr": 0.01, "position": 8.3},
         ]
 
     def query(self, start, end, dimensions, row_limit=5000, filters=None):
@@ -78,8 +78,9 @@ class FakeGitHub:
             return {"total": 3, "pending": [], "failed": [], "ok": True}
         return {"total": 3, "pending": [], "failed": ["php-tests"], "ok": False}
 
-    def merge(self, number, title):
+    def merge(self, number, title, sha):
         self.merged.append(number)
+        self.merged_sha = sha
         return "merged-sha"
 
     def close(self, number):
@@ -126,7 +127,7 @@ class FakeLLM:
             return good_draft()
         if task == "report":
             return {"summary": "Poco tráfico.", "services": [
-                {"slug": "apps-medida", "verdict": "reforzar", "evidence": "179 impr. en pos. 82", "suggestion": "Caso real"}],
+                {"slug": "apps-medida", "verdict": "reforzar", "evidence": "140 impr. en pos. 64", "suggestion": "Caso real"}],
                 "gaps": []}
         return {"memo": ["Los temas comerciales aún no tienen datos."]}
 
@@ -148,10 +149,10 @@ PLAN = {
         {"kind": "new", "slug": "Software gestión a medida", "title": "Cómo elegir software de gestión a medida",
          "category": "Negocio", "target_keyword": "software de gestion a medida", "intent": "commercial",
          "angle": "Lo que aprendí con ArrayStock", "outline": ["Qué es", "Cuánto cuesta", "Cómo elegir"],
-         "rationale": "179 impresiones en posición 82 sin artículo que lo cubra", "service": "apps-medida"},
+         "rationale": "140 impresiones en posición 64 sin artículo que lo cubra", "service": "apps-medida"},
         {"kind": "improve", "slug": "pnpm-vs-npm-ventajas", "existing_slug": "pnpm-vs-npm-ventajas",
          "title": "Mejorar npm o pnpm", "category": "DevOps", "target_keyword": "npm o pnpm", "intent": "comparison",
-         "angle": "Configuración real del repo", "outline": ["Tabla", "Instalar"], "rationale": "pos. 7,7 y CTR bajo"},
+         "angle": "Configuración real del repo", "outline": ["Tabla", "Instalar"], "rationale": "pos. 8,3 y CTR bajo"},
         {"kind": "improve", "slug": "no-existe", "title": "Inventado", "category": "DevOps", "target_keyword": "x",
          "intent": "informational", "angle": "", "outline": [], "rationale": ""},
     ],
@@ -167,6 +168,10 @@ class FlowTest(unittest.TestCase):
             "VCA_TELEGRAM_TOKEN": "123:abc",
             "VCA_TELEGRAM_CHAT_ID": CHAT,
             "VCA_GITHUB_TOKEN": "x",
+            "VCA_GITHUB_REPO": "owner/site",
+            "VCA_GSC_SITE": "sc-domain:verticedev.es",
+            "VCA_SITE_URL": SITE_URL,
+            "VCA_DEPLOY_COMMAND": "cd /var/www/web && bash deploy.sh",
             "VCA_TIMEZONE": "UTC",
         })
         self.app = App(cfg)
@@ -183,12 +188,18 @@ class FlowTest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def press(self, data, chat=CHAT):
+    def press(self, data, chat=CHAT, sender=None):
         self.bot.handle({"update_id": 1, "callback_query": {
-            "id": "cb", "data": data, "message": {"message_id": 1, "chat": {"id": int(chat)}}}})
+            "id": "cb", "data": data, "from": {"id": int(sender or chat)},
+            "message": {"message_id": 1, "chat": {"id": int(chat)}}}})
 
-    def say(self, text, chat=CHAT):
-        self.bot.handle({"update_id": 2, "message": {"chat": {"id": int(chat)}, "text": text}})
+    def say(self, text, chat=CHAT, sender=None):
+        self.bot.handle({"update_id": 2, "message": {
+            "chat": {"id": int(chat)}, "from": {"id": int(sender or chat)}, "text": text}})
+
+    def publish(self, pid):
+        """Pulsa el «Publicar» del último borrador, como haría el botón real."""
+        self.press(f"publish:{pid}:{app_module.draft_version(self.app.db.proposal(pid)['draft'])}")
 
     def run_queue(self):
         while not self.app.tasks.empty():
@@ -215,7 +226,7 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(written["entry"]["date"], self.app.today().isoformat())
         self.assertIn("@extends('layouts.article'", written["view"])
 
-        self.press(f"publish:{new['id']}")
+        self.publish(new["id"])
         self.run_queue()
         self.assertEqual(self.app.db.proposal(new["id"])["status"], "publishing")
 
@@ -279,7 +290,7 @@ class FlowTest(unittest.TestCase):
         p = self.app.db.proposals()[0]
         self.press(f"draft:{p['id']}")
         self.run_queue()
-        self.press(f"publish:{p['id']}")
+        self.publish(p["id"])
         self.run_queue()
         self.app.ci_watch()
         self.assertEqual(self.app.db.proposal(p["id"])["status"], "review")
@@ -292,7 +303,7 @@ class FlowTest(unittest.TestCase):
         p = self.app.db.proposals()[0]
         self.press(f"draft:{p['id']}")
         self.run_queue()
-        self.press(f"publish:{p['id']}")
+        self.publish(p["id"])
         self.run_queue()
         self.app.ci_watch()
         self.assertEqual(self.app.db.proposal(p["id"])["status"], "publishing")
@@ -311,6 +322,34 @@ class FlowTest(unittest.TestCase):
         self.say("/estado", chat="999")
         self.assertEqual(len(self.tg.messages), count)
         self.assertEqual(self.app.db.proposal(p["id"])["status"], "proposed")
+
+    def test_other_members_of_the_chat_are_ignored(self):
+        # Si el bot acabara en un grupo con el id configurado, solo el dueño puede actuar.
+        self.app.plan_week()
+        p = self.app.db.proposals()[0]
+        count = len(self.tg.messages)
+        self.press(f"draft:{p['id']}", sender="777")
+        self.say("/investigar", sender="777")
+        self.assertEqual(len(self.tg.messages), count)
+        self.assertEqual(self.app.db.proposal(p["id"])["status"], "proposed")
+
+    def test_publish_button_of_an_old_draft_does_nothing(self):
+        self.app.plan_week()
+        p = self.app.db.proposals()[0]
+        self.press(f"draft:{p['id']}")
+        self.run_queue()
+        self.press(f"publish:{p['id']}:{app_module.draft_version({'otro': 'borrador'})}")
+        self.press(f"publish:{p['id']}")
+        self.assertTrue(self.app.tasks.empty())
+        self.assertEqual(self.app.db.proposal(p["id"])["status"], "review")
+
+    def test_worker_survives_telegram_failures(self):
+        def broken_send(text, buttons=None):
+            raise app_module.http.HttpError(0, "sin red", "https://api.telegram.org/x")
+
+        self.tg.send = broken_send
+        with self.assertLogs("vca", level="ERROR"):
+            self.app.run_task("falla", lambda: 1 / 0)  # no debe propagar aunque Telegram tampoco responda
 
     def test_double_press_is_harmless(self):
         self.app.plan_week()

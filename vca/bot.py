@@ -1,6 +1,8 @@
-"""Conversación con Miguel por Telegram: comandos, botones y respuestas de texto.
+"""Conversación con el dueño por Telegram: comandos, botones y respuestas de texto.
 
-Solo atiende al chat configurado en VCA_TELEGRAM_CHAT_ID; el resto se ignora.
+Solo atiende a VCA_TELEGRAM_CHAT_ID en su chat privado con el bot: el chat y el
+remitente tienen que ser ese id (en un chat privado coinciden). Así, aunque el bot
+acabe en un grupo, nadie más puede aprobar ni publicar. El resto se ignora.
 Lo rápido (estado, ayuda) se responde aquí; lo pesado va a la cola del
 trabajador para no bloquear el bot.
 """
@@ -11,14 +13,15 @@ import logging
 import time
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
-from .telegram import TelegramError, esc
+from .app import draft_version
+from .telegram import esc
 
 if TYPE_CHECKING:
     from .app import App
 
 log = logging.getLogger("vca.bot")
 
-HELP = """🤖 <b>Agente de contenido de VérticeDev</b>
+HELP = """🤖 <b>Agente de contenido</b>
 
 Cada semana investigo qué se busca (Search Console y autocompletado de Google), te propongo temas y, si apruebas uno, lo redacto y abro el PR. Al pulsar «Publicar» espero a que CI pase y lo fusiono; el despliegue lo lanzas tú.
 
@@ -56,7 +59,7 @@ class Bot:
             try:
                 updates = self.tg.updates(offset)
                 backoff = 5
-            except TelegramError as exc:
+            except Exception as exc:  # TelegramError, JSON roto…: el hilo del bot no puede morir
                 log.warning("Telegram: %s", exc)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 120)
@@ -71,18 +74,22 @@ class Bot:
 
     # --- despacho -----------------------------------------------------------
 
+    def authorized(self, chat: Dict[str, Any], sender: Dict[str, Any]) -> bool:
+        return str(chat.get("id", "")) == self.chat_id and str(sender.get("id", "")) == self.chat_id
+
     def handle(self, upd: Dict[str, Any]) -> None:
         if "callback_query" in upd:
             cq = upd["callback_query"]
-            chat = str(cq.get("message", {}).get("chat", {}).get("id", ""))
-            if chat != self.chat_id:
-                log.warning("Botón de un chat no autorizado: %s", chat)
+            if not self.authorized(cq.get("message", {}).get("chat", {}), cq.get("from", {})):
+                log.warning("Botón no autorizado: chat %s, usuario %s",
+                            cq.get("message", {}).get("chat", {}).get("id"), cq.get("from", {}).get("id"))
                 return
             self.on_button(cq)
             return
         msg = upd.get("message") or {}
-        if str(msg.get("chat", {}).get("id", "")) != self.chat_id:
-            log.warning("Mensaje de un chat no autorizado: %s", msg.get("chat", {}).get("id"))
+        if not self.authorized(msg.get("chat", {}), msg.get("from", {})):
+            log.warning("Mensaje no autorizado: chat %s, usuario %s",
+                        msg.get("chat", {}).get("id"), msg.get("from", {}).get("id"))
             return
         text = (msg.get("text") or "").strip()
         if not text:
@@ -132,7 +139,8 @@ class Bot:
     # --- botones ------------------------------------------------------------
 
     def on_button(self, cq: Dict[str, Any]) -> None:
-        action, _, raw_id = (cq.get("data") or "").partition(":")
+        action, _, rest = (cq.get("data") or "").partition(":")
+        raw_id, _, version = rest.partition(":")
         message_id = cq.get("message", {}).get("message_id")
         try:
             pid = int(raw_id)
@@ -154,6 +162,10 @@ class Bot:
             return
         if p["status"] not in expected[action]:
             self.tg.answer(cq["id"], f"Ya está en estado «{p['status']}»")
+            self.tg.edit_buttons(message_id)
+            return
+        if action == "publish" and version != draft_version(p.get("draft")):
+            self.tg.answer(cq["id"], "Ese botón es de un borrador anterior: usa el del último borrador")
             self.tg.edit_buttons(message_id)
             return
         self.tg.answer(cq["id"])

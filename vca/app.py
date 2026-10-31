@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
@@ -30,15 +31,30 @@ INTENT_LABEL = {
     "comparison": "comparación",
     "local": "local",
 }
-PR_TRAILER = "\n\nGenerado por vertice-content-agent y aprobado por Miguel en Telegram."
+PR_TRAILER = "\n\nGenerado por vertice-content-agent y aprobado en Telegram."
 
 
 def proposal_buttons(pid: int) -> List[List[Tuple[str, str]]]:
     return [[("✍️ Redactar", f"draft:{pid}"), ("💬 Ajustar", f"adjust:{pid}")], [("🗑 Descartar", f"reject:{pid}")]]
 
 
-def review_buttons(pid: int) -> List[List[Tuple[str, str]]]:
-    return [[("🚀 Publicar", f"publish:{pid}"), ("✏️ Pedir cambios", f"changes:{pid}")], [("🗑 Descartar", f"discard:{pid}")]]
+def draft_version(draft: Optional[Dict[str, Any]]) -> str:
+    """Huella corta del borrador: el «Publicar» de un borrador anterior no publica el que lo sustituye."""
+    raw = json.dumps(draft or {}, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:12]
+
+
+def review_buttons(p: Dict[str, Any]) -> List[List[Tuple[str, str]]]:
+    pid = p["id"]
+    return [
+        [("🚀 Publicar", f"publish:{pid}:{draft_version(p.get('draft'))}"), ("✏️ Pedir cambios", f"changes:{pid}")],
+        [("🗑 Descartar", f"discard:{pid}")],
+    ]
+
+
+def no_mentions(text: str) -> str:
+    """Evita que un texto de la IA mencione a usuarios de GitHub (@usuario) en el PR."""
+    return str(text).replace("@", "@⁠")
 
 
 def retry_buttons(pid: int) -> List[List[Tuple[str, str]]]:
@@ -88,6 +104,11 @@ class App:
     def page_url(self, slug: str) -> str:
         return f"{self.cfg.site_url}/blog/{slug}"
 
+    def profile(self) -> Dict[str, str]:
+        """Quién escribe el blog, para los prompts."""
+        return {"brand": self.cfg.brand, "site_url": self.cfg.site_url,
+                "owner": self.cfg.owner, "author": self.cfg.author}
+
     def enqueue(self, name: str, fn: Callable[..., Any], *args: Any) -> None:
         log.info("En cola: %s", name)
         self.tasks.put((name, fn, args))
@@ -98,8 +119,11 @@ class App:
             fn(*args)
         except Exception as exc:  # el servicio no se cae por un trabajo
             log.exception("Error en %s", name)
-            self.db.log_event(self.now(), "error", {"task": name, "error": str(exc)[:500]})
-            self.tg.send(f"⚠️ Error en <b>{esc(name)}</b>: {esc(http.redact(str(exc))[:800])}")
+            try:
+                self.db.log_event(self.now(), "error", {"task": name, "error": str(exc)[:500]})
+                self.tg.send(f"⚠️ Error en <b>{esc(name)}</b>: {esc(http.redact(str(exc))[:800])}")
+            except Exception:  # si Telegram tampoco responde, queda en el log y se sigue
+                log.exception("No he podido avisar del error en %s", name)
         finally:
             self.busy = None
 
@@ -109,7 +133,10 @@ class App:
                 name, fn, args = self.tasks.get(timeout=1)
             except queue.Empty:
                 continue
-            self.run_task(name, fn, *args)
+            try:
+                self.run_task(name, fn, *args)
+            except Exception:
+                log.exception("Fallo inesperado del trabajador en %s", name)
 
     def require_gsc(self) -> SearchConsole:
         if not self.gsc:
@@ -146,7 +173,7 @@ class App:
         self.db.save_keywords(snapshot, [c.as_row() for c in cands[:500]])
 
         context = self.plan_context(site, cands[:40], rows, start, end)
-        result = self.llm.run("plan", schemas.load_prompt("plan"), json.dumps(context, ensure_ascii=False, indent=1),
+        result = self.llm.run("plan", schemas.load_prompt("plan", **self.profile()), json.dumps(context, ensure_ascii=False, indent=1),
                               schemas.plan(site.categories), cfg.model_plan)
         stored = self.accept_proposals(result.get("proposals") or [], site, weights, prefs)
 
@@ -250,7 +277,8 @@ class App:
                 category = (site.post(slug) or {}).get("category") or site.categories[-1]
             kw = self.db.keyword(item.get("target_keyword", "")) or self.find_keyword(item.get("target_keyword", ""))
             cand = research.Candidate(keyword=item.get("target_keyword", ""))
-            cand.intent = item.get("intent") or research.classify_intent(cand.keyword)
+            intent = item.get("intent")
+            cand.intent = intent if intent in INTENT_LABEL else research.classify_intent(cand.keyword)
             features = (kw or {}).get("features") or research.features(cand)
             values = {"category": category, "intent": cand.intent, "kind": kind}
             pid = self.db.add_proposal(self.now(), {
@@ -285,14 +313,14 @@ class App:
         lines = [
             f"<b>{KIND_LABEL[p['kind']]}</b> · {esc(p['category'])}",
             f"<b>{esc(p['title'])}</b>",
-            f"🎯 <i>{esc(p['target_keyword'])}</i> · intención {INTENT_LABEL.get(p['intent'], p['intent'])}",
+            f"🎯 <i>{esc(p['target_keyword'])}</i> · intención {esc(INTENT_LABEL.get(p['intent'], p['intent']))}",
             f"📊 {esc(metric_line(kw))}",
             f"💡 {esc(p['angle'])}",
             f"🧩 {esc(outline)}",
             f"Por qué: {esc(p['rationale'])}",
         ]
         if p["kind"] == "improve":
-            lines.insert(2, f"📄 {self.page_url(p['slug'])}")
+            lines.insert(2, f"📄 {esc(self.page_url(p['slug']))}")
         if p.get("service"):
             lines.append(f"🔗 Servicio: {esc(p['service'])}")
         lines.append(f"Puntuación: {fmt_num(p['predicted'] or 0, 2)}")
@@ -310,7 +338,7 @@ class App:
         site = self.site.load()
         prompt = json.dumps(self.draft_context(p, site), ensure_ascii=False, indent=1)
         schema = schemas.draft(site.categories)
-        system = schemas.load_prompt("draft")
+        system = schemas.load_prompt("draft", **self.profile())
         draft = self.llm.run("draft", system, prompt, schema, self.cfg.model_draft)
         errors = self.validate(draft, p, site)
         if errors:
@@ -422,10 +450,13 @@ class App:
             f"- Description: {draft['description']} ({len(draft['description'])})",
             f"- Lectura: {draft['reading']}",
         ]
+        links = render.external_links(draft)
+        if links:
+            lines.append(f"- Enlaces externos: {', '.join(links)}")
         if draft.get("needs_input"):
-            lines += ["", "**Pendiente de confirmar por Miguel:**"] + [f"- {q}" for q in draft["needs_input"]]
-        lines += ["", "Se fusiona desde Telegram cuando Miguel lo aprueba y CI está en verde."]
-        return "\n".join(lines)
+            lines += ["", "**Pendiente de confirmar:**"] + [f"- {q}" for q in draft["needs_input"]]
+        lines += ["", "Se fusiona desde Telegram cuando lo apruebas y CI está en verde."]
+        return no_mentions("\n".join(lines))
 
     def send_review(self, p: Dict[str, Any], site: SiteData) -> None:
         d = p["draft"]
@@ -438,6 +469,8 @@ class App:
             f"{fmt_num(words)} palabras · {esc(d['reading'])} · {esc(d['category'])}",
             f"🎯 {esc(p['target_keyword'])}",
         ]
+        links = render.external_links(d)
+        lines.append(f"🌐 Enlaces externos: {esc(', '.join(links))}" if links else "🌐 Sin enlaces externos")
         if p.get("pr_url"):
             lines.append(f'PR: <a href="{esc(p["pr_url"])}">#{p["pr_number"]}</a> (CI en marcha)')
         elif self.cfg.dry_run:
@@ -446,8 +479,8 @@ class App:
             lines.append("⚠️ <b>Necesito que me confirmes:</b>")
             lines += [f"• {esc(q)}" for q in d["needs_input"]]
             lines.append("Respóndeme con «✏️ Pedir cambios».")
-        self.tg.send("\n".join(lines), review_buttons(p["id"]))
-        preview = render.render_preview(d, site.paths).encode("utf-8")
+        self.tg.send("\n".join(lines), review_buttons(p))
+        preview = render.render_preview(d, site.paths, origin=self.cfg.site_url).encode("utf-8")
         self.tg.send_document(f"{p['slug']}.html", preview, "Borrador para leer en el móvil")
 
     # --- publicación --------------------------------------------------------
@@ -488,7 +521,7 @@ class App:
                     self.tg.send(
                         f"⚠️ No puedo leer la CI de «{esc(p['title'])}»: {esc(str(exc)[:200])}. "
                         f'Revisa que el token de GitHub tenga Actions en lectura. <a href="{esc(p["pr_url"])}">Ver PR</a>',
-                        review_buttons(p["id"]),
+                        review_buttons(p),
                     )
                 continue
             if checks["ok"]:
@@ -498,31 +531,32 @@ class App:
                 self.tg.send(
                     f"❌ CI ha fallado en «{esc(p['title'])}» ({esc(failed_summary(checks['failed']))}). "
                     f'<a href="{esc(p["pr_url"])}">Ver PR</a>',
-                    review_buttons(p["id"]),
+                    review_buttons(p),
                 )
             elif self.now() - since > timedelta(minutes=self.cfg.ci_timeout_minutes):
                 self.db.update_proposal(p["id"], self.now(), status="review")
                 self.tg.send(
                     f"⌛ CI no ha terminado en {self.cfg.ci_timeout_minutes} min para «{esc(p['title'])}». "
                     f'<a href="{esc(p["pr_url"])}">Ver PR</a>. Pulsa publicar de nuevo cuando quieras.',
-                    review_buttons(p["id"]),
+                    review_buttons(p),
                 )
 
     def merge(self, p: Dict[str, Any]) -> None:
         title = f"Merge {self.branch(p)}: {p['draft']['headline']}"
         try:
-            self.github.merge(p["pr_number"], title)
+            self.github.merge(p["pr_number"], title, p["head_sha"])
         except http.HttpError as exc:
             self.db.update_proposal(p["id"], self.now(), status="review", last_error=str(exc)[:500])
             self.tg.send(f"❌ GitHub no me deja fusionar «{esc(p['title'])}»: {esc(str(exc)[:300])}",
-                         review_buttons(p["id"]))
+                         review_buttons(p))
             return
         self.github.delete_branch(self.branch(p))
         self.db.update_proposal(p["id"], self.now(), status="merged", merged_at=self.now().isoformat())
+        deploy = (f"ejecuta en el servidor <code>{esc(self.cfg.deploy_command)}</code>"
+                  if self.cfg.deploy_command else "despliega la web")
         self.tg.send(
-            f"✅ Fusionado en main: «{esc(p['draft']['headline'])}».\n"
-            "Para publicarlo, ejecuta en el VPS <code>cd /var/www/verticedev &amp;&amp; bash deploy.sh</code>. "
-            "Te aviso cuando lo vea en producción."
+            f"✅ Fusionado en {esc(self.cfg.github_base)}: «{esc(p['draft']['headline'])}».\n"
+            f"Para publicarlo, {deploy}. Te aviso cuando lo vea en producción."
         )
 
     def discard(self, pid: int) -> None:
@@ -651,7 +685,7 @@ class App:
             "autocompletado": suggest_rows,
             "total_impresiones": sum(r["impressions"] for r in rows),
         }
-        report = self.llm.run("report", schemas.load_prompt("report"), json.dumps(context, ensure_ascii=False, indent=1),
+        report = self.llm.run("report", schemas.load_prompt("report", **self.profile()), json.dumps(context, ensure_ascii=False, indent=1),
                               schemas.REPORT, self.cfg.model_plan)
         icons = {"mantener": "🟢", "reforzar": "🟡", "reorientar": "🔁", "revisar": "🔴"}
         lines = ["💼 <b>Informe mensual de servicios</b>", esc(report.get("summary", ""))]
@@ -676,7 +710,7 @@ class App:
             "pesos": learning.describe_weights(learning.merged_weights(self.db.weights())),
             "memoria_anterior": self.db.latest_insight(),
         }
-        result = self.llm.run("insights", schemas.load_prompt("insights"),
+        result = self.llm.run("insights", schemas.load_prompt("insights", **self.profile()),
                               json.dumps(context, ensure_ascii=False, indent=1, default=str),
                               schemas.INSIGHTS, self.cfg.model_plan)
         memo = [m.strip() for m in result.get("memo", []) if m.strip()][:8]
@@ -724,7 +758,8 @@ class App:
 
     # --- bucle principal ----------------------------------------------------
 
-    def run_forever(self) -> None:
+    def run_forever(self) -> bool:
+        """Bucle del servicio. Devuelve False si un hilo ha muerto, para que systemd lo reinicie."""
         from .bot import Bot
         from .scheduler import is_due, parse
 
@@ -745,6 +780,11 @@ class App:
         log.info("vertice-content-agent en marcha")
         self.tg.send("🟢 Agente de contenido en marcha. /ayuda para ver qué puedo hacer.")
         while not self.stop.is_set():
+            dead = [t.name for t in threads if not t.is_alive()]
+            if dead and self.cfg.telegram_token:
+                log.error("Hilos parados: %s. Salgo para que systemd me reinicie", ", ".join(dead))
+                self.stop.set()
+                return False
             current = self.now()
             for name, schedule, fn in jobs:
                 job = self.db.job(name)
@@ -757,6 +797,7 @@ class App:
                     self.enqueue(name, self.tracked(name, fn))
             self.stop.wait(30)
         log.info("Parando")
+        return True
 
     def tracked(self, name: str, fn: Callable[[], None]) -> Callable[[], None]:
         def wrapper() -> None:

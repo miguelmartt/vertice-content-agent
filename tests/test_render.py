@@ -18,10 +18,22 @@ class InlineTest(unittest.TestCase):
 
     def test_neutralizes_blade(self):
         out = render.render_inline("Usa {{ $x }} y {!! $y !!} o @foreach, pero hola@verticedev.es", PATHS)
-        self.assertIn("@{{ $x }}", out)
-        self.assertIn("@{!! $y !!}", out)
-        self.assertIn("@@foreach", out)
-        self.assertIn("hola@verticedev.es", out)
+        self.assertNotRegex(out, r"[@{}]")
+        self.assertIn("&#123;&#123; $x &#125;&#125;", out)
+        self.assertIn("&#64;foreach", out)
+        self.assertIn("hola&#64;verticedev.es", out)
+
+    def test_blade_bypasses_are_neutralized(self):
+        # Blade no usa \w Unicode: una letra acentuada antes de @ no la protegía. Y los
+        # comentarios {{-- --}} se quitaban antes de compilar, dejando un @ suelto.
+        for payload in ("está@php(system('id'))", "nº@include('x')", "x {{--a--}}php(system('id'))"):
+            out = render.render_inline(payload, PATHS)
+            self.assertNotRegex(out, r"[@{}]", payload)
+            draft = good_draft()
+            draft["blocks"].append({"type": "p", "text": payload})
+            draft["blocks"].append({"type": "table", "headers": [payload, "b"], "rows": [[payload, "c"]]})
+            self.assertEqual(validate(draft), [], payload)
+            self.assertNotRegex(render.TEMPLATE_RE.sub("", render.render_view(draft, PATHS)), r"[@{}]", payload)
 
     def test_bold_code_and_internal_link(self):
         out = render.render_inline("**Clave**: usa `pnpm` y mira [el servicio](/servicios/apps-medida/)", PATHS)
@@ -41,22 +53,27 @@ class InlineTest(unittest.TestCase):
     def test_external_link_and_rejected_scheme(self):
         errors = []
         out = render.render_inline("[docs](https://laravel.com/docs) y [mal](javascript:alert(1))", PATHS, errors)
-        self.assertIn('href="https://laravel.com/docs" target="_blank" rel="noopener noreferrer"', out)
+        self.assertIn('href="https://laravel.com/docs" target="_blank" rel="nofollow noopener noreferrer"', out)
         self.assertNotIn("javascript:", out.split("mal")[0])
+        self.assertTrue(errors)
+
+    def test_internal_link_path_must_be_plain(self):
+        errors = []
+        paths = PATHS | {"/blog/x')}}{{system('id')"}
+        out = render.render_inline("[x](/blog/x')}}{{system('id'))", paths, errors)
+        self.assertNotIn("url(", out)
         self.assertTrue(errors)
 
 
 class BlocksTest(unittest.TestCase):
-    def test_code_block_escaped_and_verbatim_when_needed(self):
+    def test_code_block_is_escaped_without_verbatim(self):
         errors = []
-        out = render.render_blocks([{"type": "code", "language": "php", "code": "<?php echo '{{ x }}';"}], PATHS, errors)
-        self.assertIn("@verbatim", out)
-        self.assertIn('<code class="language-php">&lt;?php echo \'{{ x }}\';</code>', out)
-        self.assertEqual(errors, [])
-
-    def test_plain_code_block_without_verbatim(self):
-        out = render.render_blocks([{"type": "code", "language": "bash", "code": "pnpm install"}], PATHS, [])
+        code = "<?php echo '{{ x }}'; @endverbatim @php"
+        out = render.render_blocks([{"type": "code", "language": "php", "code": code}], PATHS, errors)
         self.assertNotIn("@verbatim", out)
+        self.assertIn("&lt;?php echo &#x27;&#123;&#123; x &#125;&#125;&#x27;; &#64;endverbatim &#64;php", out)
+        self.assertNotRegex(out, r"[@{}]")
+        self.assertEqual(errors, [])
 
     def test_unknown_language_is_an_error(self):
         errors = []
@@ -101,7 +118,15 @@ class ValidateTest(unittest.TestCase):
     def test_blade_in_metadata_is_rejected(self):
         draft = good_draft()
         draft["headline"] = "Usa @vite en Laravel"
-        self.assertTrue(any("headline" in e for e in validate(draft)))
+        draft["keywords"] = ["laravel", "x {{-- y"]
+        errors = validate(draft)
+        self.assertTrue(any("headline" in e for e in errors))
+        self.assertTrue(any("palabra clave" in e for e in errors))
+
+    def test_external_links_are_listed(self):
+        draft = good_draft()
+        draft["blocks"].append({"type": "p", "text": "Ver [docs](https://Laravel.com/docs) y [otra](https://example.org/a)"})
+        self.assertEqual(render.external_links(draft), ["example.org", "laravel.com"])
 
     def test_debug_calls_rejected_even_in_code(self):
         draft = good_draft()
@@ -122,7 +147,7 @@ class ValidateTest(unittest.TestCase):
         self.assertEqual(render.finalize(good_draft())["reading"], "5 min")
 
     def test_preview_has_absolute_links(self):
-        html = render.render_preview(good_draft(), PATHS)
+        html = render.render_preview(good_draft(), PATHS, origin="https://verticedev.es")
         self.assertIn('href="https://verticedev.es/servicios/apps-medida"', html)
 
 
