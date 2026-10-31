@@ -107,6 +107,12 @@ def extract_sections(view: str) -> Dict[str, str]:
     return out
 
 
+def write_lf(path: Path, text: str) -> None:
+    """Escribe con finales LF. `Path.write_text(newline=…)` no existe hasta Python 3.10."""
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
 class SiteRepo:
     def __init__(self, directory: Path, repo: str, token: str, base: str, git_bin: str, php_bin: str,
                  author_name: str, author_email: str):
@@ -179,8 +185,8 @@ class SiteRepo:
         source = blog_php.read_text(encoding="utf-8")
         line = registry_line(registry_entry)
         source = insert_post(source, line) if kind == "new" else replace_post(source, slug, line)
-        blog_php.write_text(source, encoding="utf-8", newline="\n")
-        self.view_path(slug).write_text(view, encoding="utf-8", newline="\n")
+        write_lf(blog_php, source)
+        write_lf(self.view_path(slug), view)
         return ["app/Support/Blog.php", f"resources/views/blog/{slug}.blade.php"]
 
     def lint(self, paths: List[str]) -> None:
